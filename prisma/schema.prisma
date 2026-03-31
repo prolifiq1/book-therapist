@@ -1,0 +1,349 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Auth Models ───────────────────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── User Models ───────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts          Account[]
+  sessions          Session[]
+  readerProfile     ReaderProfile?
+  quizResponses     QuizResponse[]
+  savedBooks        SavedBook[]
+  userRatings       UserRating[]
+  userNotes         UserNote[]
+  recommendationLog RecommendationLog[]
+}
+
+model ReaderProfile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  profileType     String   // e.g. "The Reflective Thinker"
+  profileSlug     String   // e.g. "reflective-thinker"
+  description     String   @db.Text
+  traits          Json     // weighted personality vector
+  preferredGenres String[] // genre slugs
+  preferredThemes String[] // theme slugs
+  preferredTone   String[] // e.g. ["warm", "introspective"]
+  preferredPace   String   // slow, medium, fast
+  fictionPref     String   // fiction, nonfiction, both
+  avoidTopics     String[]
+  weeklyReadTime  String   // e.g. "1-3 hours"
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model QuizResponse {
+  id        String   @id @default(cuid())
+  userId    String
+  question  String
+  answer    Json     // can be string, array, or object
+  category  String   // personality, preference, mood, etc.
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─── Book Models ───────────────────────────────────────────
+
+model Book {
+  id               String   @id @default(cuid())
+  title            String
+  slug             String   @unique
+  subtitle         String?
+  description      String   @db.Text
+  longDescription  String?  @db.Text
+  coverImage       String?
+  pageCount        Int?
+  language         String   @default("English")
+  isbn10           String?
+  isbn13           String?
+  publishedDate    String?
+  publisher        String?
+  avgRating        Float    @default(0)
+  ratingsCount     Int      @default(0)
+  readingDifficulty String  @default("moderate") // easy, moderate, challenging
+  pacing           String   @default("medium")   // slow, medium, fast
+  emotionalTone    String[] // warm, dark, hopeful, melancholic, etc.
+  isFiction        Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Vectors for recommendation
+  themeVector      Json?    // weighted theme scores
+  toneVector       Json?    // weighted tone scores
+  personalityFit   Json?    // which personality types this book fits
+
+  authors      BookAuthor[]
+  genres       BookGenre[]
+  themes       BookTheme[]
+  tags         BookTag[]
+  awards       BookAward[]
+  adaptations  Adaptation[]
+  reviews      Review[]
+  quotes       BookQuote[]
+  savedBy      SavedBook[]
+  ratings      UserRating[]
+  notes        UserNote[]
+  similarTo    SimilarBook[] @relation("SimilarFrom")
+  similarFrom  SimilarBook[] @relation("SimilarTo")
+  recommendations RecommendationLog[]
+
+  @@index([avgRating])
+  @@index([isFiction])
+}
+
+model Author {
+  id        String       @id @default(cuid())
+  name      String
+  slug      String       @unique
+  bio       String?      @db.Text
+  image     String?
+  books     BookAuthor[]
+  createdAt DateTime     @default(now())
+}
+
+model BookAuthor {
+  bookId   String
+  authorId String
+  role     String @default("author") // author, co-author, editor
+
+  book   Book   @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  author Author @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@id([bookId, authorId])
+}
+
+model Genre {
+  id    String      @id @default(cuid())
+  name  String      @unique
+  slug  String      @unique
+  icon  String?
+  books BookGenre[]
+}
+
+model BookGenre {
+  bookId  String
+  genreId String
+
+  book  Book  @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  genre Genre @relation(fields: [genreId], references: [id], onDelete: Cascade)
+
+  @@id([bookId, genreId])
+}
+
+model Theme {
+  id    String      @id @default(cuid())
+  name  String      @unique
+  slug  String      @unique
+  books BookTheme[]
+}
+
+model BookTheme {
+  bookId  String
+  themeId String
+
+  book  Book  @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  theme Theme @relation(fields: [themeId], references: [id], onDelete: Cascade)
+
+  @@id([bookId, themeId])
+}
+
+model Tag {
+  id    String    @id @default(cuid())
+  name  String    @unique
+  slug  String    @unique
+  books BookTag[]
+}
+
+model BookTag {
+  bookId String
+  tagId  String
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  tag  Tag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([bookId, tagId])
+}
+
+model BookAward {
+  id       String  @id @default(cuid())
+  bookId   String
+  name     String  // e.g. "Pulitzer Prize"
+  category String? // e.g. "Fiction"
+  year     Int?
+  won      Boolean @default(false) // true = won, false = nominated
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@index([bookId])
+}
+
+model Adaptation {
+  id       String  @id @default(cuid())
+  bookId   String
+  type     String  // film, tv, stage, podcast, graphic-novel
+  title    String
+  year     Int?
+  director String?
+  platform String? // Netflix, HBO, etc.
+  url      String?
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@index([bookId])
+}
+
+model Review {
+  id        String  @id @default(cuid())
+  bookId    String
+  source    String  // NYT, Goodreads, Kirkus, etc.
+  author    String?
+  content   String  @db.Text
+  rating    Float?
+  url       String?
+  highlight String? @db.Text // key quote from review
+  sentiment String? // positive, mixed, negative
+  createdAt DateTime @default(now())
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@index([bookId])
+}
+
+model BookQuote {
+  id     String @id @default(cuid())
+  bookId String
+  text   String @db.Text
+  page   Int?
+
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@index([bookId])
+}
+
+model SimilarBook {
+  id          String @id @default(cuid())
+  bookId      String
+  similarToId String
+  score       Float  @default(0) // similarity score 0-1
+
+  book      Book @relation("SimilarFrom", fields: [bookId], references: [id], onDelete: Cascade)
+  similarTo Book @relation("SimilarTo", fields: [similarToId], references: [id], onDelete: Cascade)
+
+  @@unique([bookId, similarToId])
+}
+
+// ─── User Library Models ──────────────────────────────────
+
+model SavedBook {
+  id        String   @id @default(cuid())
+  userId    String
+  bookId    String
+  status    String   @default("want_to_read") // want_to_read, reading, finished
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, bookId])
+}
+
+model UserRating {
+  id        String   @id @default(cuid())
+  userId    String
+  bookId    String
+  rating    Int      // 1-5
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, bookId])
+}
+
+model UserNote {
+  id        String   @id @default(cuid())
+  userId    String
+  bookId    String
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@index([userId, bookId])
+}
+
+model RecommendationLog {
+  id            String   @id @default(cuid())
+  userId        String
+  bookId        String
+  score         Float    // compatibility score
+  explanation   String   @db.Text // "Why this book fits you"
+  profileType   String   // reader profile at time of recommendation
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([bookId])
+}
