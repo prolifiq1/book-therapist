@@ -1,23 +1,15 @@
-import { getBookBySlug, getSimilarBooks } from "@/lib/data/books";
+import { getBookBySlugFromDb } from "@/lib/data/db-books";
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
-  const book = getBookBySlug(slug);
+  const result = await getBookBySlugFromDb(slug);
 
-  if (!book) {
+  if (!result) {
     return Response.json({ error: "Book not found" }, { status: 404 });
   }
 
-  const similarBooks = getSimilarBooks(slug).map((b) => ({
-    slug: b.slug,
-    title: b.title,
-    coverImage: b.coverImage,
-    authors: b.authors,
-    avgRating: b.avgRating,
-  }));
-
-  return Response.json({ book, similarBooks });
+  return Response.json(result);
 }

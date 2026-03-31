@@ -1,5 +1,6 @@
-import { getGenres } from "@/lib/data/books";
+import { getGenresFromDb } from "@/lib/data/db-books";
 
 export async function GET() {
-  return Response.json({ genres: getGenres() });
+  const genres = await getGenresFromDb();
+  return Response.json({ genres });
 }

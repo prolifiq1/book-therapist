@@ -1,20 +1,30 @@
-// Prisma client setup — requires a running PostgreSQL database
-// For the demo MVP, data is served from src/lib/data/books.ts (in-memory seed data)
-// When deploying with a real database, run `npx prisma generate` and `npx prisma db push`
+// Prisma client setup with pg adapter for Prisma 7
+// Falls back gracefully when database is not configured
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let prisma: any = null;
 
 try {
-  // Dynamic import to avoid build failures when Prisma client isn't generated
   if (process.env.DATABASE_URL && !process.env.DATABASE_URL.includes("user:password")) {
     const { PrismaClient } = require("@prisma/client");
+    const { PrismaPg } = require("@prisma/adapter-pg");
+    const { Pool } = require("pg");
+
     const globalForPrisma = globalThis as unknown as { prisma: typeof prisma };
-    prisma = globalForPrisma.prisma ?? new PrismaClient();
-    if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+
+    if (!globalForPrisma.prisma) {
+      const pool = new Pool({
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false },
+      });
+      const adapter = new PrismaPg(pool);
+      globalForPrisma.prisma = new PrismaClient({ adapter });
+    }
+
+    prisma = globalForPrisma.prisma;
   }
 } catch {
-  // Prisma client not generated yet — running in demo mode
+  // Prisma client not available — running in demo mode with seed data
 }
 
 export { prisma };

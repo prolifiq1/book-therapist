@@ -1,4 +1,4 @@
-import { getBookVectors } from "@/lib/data/books";
+import { getBookVectorsFromDb } from "@/lib/data/db-books";
 import { scoreBooks, type UserVector } from "@/lib/engine/recommender";
 import { generateReaderProfile } from "@/lib/engine/profiler";
 import type { QuizAnswer } from "@/types";
@@ -12,10 +12,8 @@ export async function POST(request: Request) {
       return Response.json({ error: "Invalid quiz answers" }, { status: 400 });
     }
 
-    // Generate reader profile from quiz answers
     const profile = generateReaderProfile(answers);
 
-    // Build user vector for recommendation engine
     const userVector: UserVector = {
       personalityType: profile.type,
       traits: profile.traits,
@@ -27,8 +25,7 @@ export async function POST(request: Request) {
       preferredGenres: profile.preferredGenres,
     };
 
-    // Score and rank books
-    const bookVectors = getBookVectors();
+    const bookVectors = await getBookVectorsFromDb();
     const scored = scoreBooks(bookVectors, userVector, 12);
 
     return Response.json({
