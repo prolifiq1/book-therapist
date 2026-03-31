@@ -175,33 +175,33 @@ async function insertBook(client: PoolClient, work: OLWork, subjectName: string)
 
     if (result.rowCount === 0) return false;
 
-    // Insert relations sequentially (avoids connection pool exhaustion)
+    // Insert relations sequentially (composite PK tables — no id column)
     for (const name of authorNames.slice(0, 3)) {
       const authorId = await getOrCreateEntity(client, authorCache, "Author", name);
       await client.query(
-        `INSERT INTO "BookAuthor" (id, "bookId", "authorId") VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-        [cuid(), bookId, authorId]
+        `INSERT INTO "BookAuthor" ("bookId", "authorId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [bookId, authorId]
       );
     }
     for (const name of genres) {
       const genreId = await getOrCreateEntity(client, genreCache, "Genre", name);
       await client.query(
-        `INSERT INTO "BookGenre" (id, "bookId", "genreId") VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-        [cuid(), bookId, genreId]
+        `INSERT INTO "BookGenre" ("bookId", "genreId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [bookId, genreId]
       );
     }
     for (const name of themes) {
       const themeId = await getOrCreateEntity(client, themeCache, "Theme", name);
       await client.query(
-        `INSERT INTO "BookTheme" (id, "bookId", "themeId") VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-        [cuid(), bookId, themeId]
+        `INSERT INTO "BookTheme" ("bookId", "themeId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [bookId, themeId]
       );
     }
     for (const name of tags) {
       const tagId = await getOrCreateEntity(client, tagCache, "Tag", name);
       await client.query(
-        `INSERT INTO "BookTag" (id, "bookId", "tagId") VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-        [cuid(), bookId, tagId]
+        `INSERT INTO "BookTag" ("bookId", "tagId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [bookId, tagId]
       );
     }
 
