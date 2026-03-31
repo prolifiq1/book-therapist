@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db/prisma";
+import { prisma, initError } from "@/lib/db/prisma";
 
 export async function GET() {
   const hasUrl = !!process.env.DATABASE_URL;
@@ -12,7 +12,7 @@ export async function GET() {
       bookCount = result;
       dbStatus = "connected";
     } catch (err: any) {
-      dbStatus = `error: ${err.message}`;
+      dbStatus = `query error: ${err.message}`;
     }
   }
 
@@ -20,6 +20,7 @@ export async function GET() {
     hasUrl,
     urlPrefix,
     prismaLoaded: prisma !== null,
+    initError,
     dbStatus,
     bookCount,
   });
