@@ -2,7 +2,7 @@
  * Book Therapist — Ingestion Script
  *
  * Fetches 20,000+ books from Open Library and inserts into database.
- * Uses raw SQL with batch inserts for speed.
+ * Resilient to Neon serverless connection drops with retry logic.
  *
  * Usage: npx tsx scripts/ingest-books.ts
  */
@@ -10,7 +10,7 @@
 import * as dotenv from "dotenv";
 dotenv.config();
 
-import { Pool, type PoolClient } from "pg";
+import { Pool } from "pg";
 import {
   generatePersonalityFit,
   generateThemeVector,
@@ -24,11 +24,17 @@ import {
   extractTags,
 } from "./lib/vector-generator";
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL!,
-  ssl: { rejectUnauthorized: false },
-  max: 3,
-});
+function createPool() {
+  return new Pool({
+    connectionString: process.env.DATABASE_URL!,
+    ssl: { rejectUnauthorized: false },
+    max: 2,
+    idleTimeoutMillis: 10000,
+    connectionTimeoutMillis: 10000,
+  });
+}
+
+let pool = createPool();
 
 const SUBJECTS = [
   "literary_fiction", "science_fiction", "fantasy", "romance",
@@ -85,8 +91,29 @@ const seenDedup = new Set<string>();
 let totalInserted = 0;
 let totalSkipped = 0;
 
+async function queryWithRetry(sql: string, params: any[], retries = 3): Promise<any> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await pool.query(sql, params);
+    } catch (err: any) {
+      const isConnectionError = err.message?.includes("Connection terminated") ||
+        err.message?.includes("connection") ||
+        err.code === "ECONNRESET" ||
+        err.code === "57P01";
+
+      if (isConnectionError && i < retries - 1) {
+        console.log(`\n⚡ Connection lost, reconnecting (attempt ${i + 2})...`);
+        try { await pool.end(); } catch {}
+        pool = createPool();
+        await sleep(2000);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function getOrCreateEntity(
-  client: PoolClient,
   cache: Map<string, string>,
   table: string,
   name: string,
@@ -95,11 +122,11 @@ async function getOrCreateEntity(
   if (cache.has(slug)) return cache.get(slug)!;
 
   const id = cuid();
-  await client.query(
+  await queryWithRetry(
     `INSERT INTO "${table}" (id, name, slug) VALUES ($1, $2, $3) ON CONFLICT (slug) DO NOTHING`,
     [id, name, slug]
   );
-  const res = await client.query(`SELECT id FROM "${table}" WHERE slug = $1`, [slug]);
+  const res = await queryWithRetry(`SELECT id FROM "${table}" WHERE slug = $1`, [slug]);
   const realId = res.rows[0]?.id || id;
   cache.set(slug, realId);
   return realId;
@@ -116,17 +143,26 @@ interface OLWork {
 
 async function fetchSubjectPage(subject: string, offset: number, limit: number): Promise<OLWork[] | null> {
   const url = `https://openlibrary.org/subjects/${subject}.json?limit=${limit}&offset=${offset}`;
-  try {
-    const res = await fetch(url, { headers: { "User-Agent": "BookTherapist/1.0" } });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.works || null;
-  } catch {
-    return null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(url, { headers: { "User-Agent": "BookTherapist/1.0" } });
+      if (!res.ok) {
+        if (res.status === 429) {
+          await sleep(5000);
+          continue;
+        }
+        return null;
+      }
+      const data = await res.json();
+      return data.works || null;
+    } catch {
+      await sleep(2000);
+    }
   }
+  return null;
 }
 
-async function insertBook(client: PoolClient, work: OLWork, subjectName: string): Promise<boolean> {
+async function insertBook(work: OLWork, subjectName: string): Promise<boolean> {
   if (!work.title || work.title.length < 2) return false;
 
   const authorNames = work.authors?.map((a) => a.name) || ["Unknown Author"];
@@ -157,7 +193,7 @@ async function insertBook(client: PoolClient, work: OLWork, subjectName: string)
   const bookId = cuid();
 
   try {
-    const result = await client.query(
+    const result = await queryWithRetry(
       `INSERT INTO "Book" (id, title, slug, description, "longDescription", "coverImage", "avgRating", "ratingsCount",
        "readingDifficulty", pacing, "emotionalTone", "isFiction", "personalityFit", "themeVector", "toneVector",
        "publishedDate", language, "createdAt", "updatedAt")
@@ -175,31 +211,31 @@ async function insertBook(client: PoolClient, work: OLWork, subjectName: string)
 
     if (result.rowCount === 0) return false;
 
-    // Insert relations sequentially (composite PK tables — no id column)
+    // Insert relations (composite PK tables — no id column)
     for (const name of authorNames.slice(0, 3)) {
-      const authorId = await getOrCreateEntity(client, authorCache, "Author", name);
-      await client.query(
+      const authorId = await getOrCreateEntity(authorCache, "Author", name);
+      await queryWithRetry(
         `INSERT INTO "BookAuthor" ("bookId", "authorId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
         [bookId, authorId]
       );
     }
     for (const name of genres) {
-      const genreId = await getOrCreateEntity(client, genreCache, "Genre", name);
-      await client.query(
+      const genreId = await getOrCreateEntity(genreCache, "Genre", name);
+      await queryWithRetry(
         `INSERT INTO "BookGenre" ("bookId", "genreId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
         [bookId, genreId]
       );
     }
     for (const name of themes) {
-      const themeId = await getOrCreateEntity(client, themeCache, "Theme", name);
-      await client.query(
+      const themeId = await getOrCreateEntity(themeCache, "Theme", name);
+      await queryWithRetry(
         `INSERT INTO "BookTheme" ("bookId", "themeId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
         [bookId, themeId]
       );
     }
     for (const name of tags) {
-      const tagId = await getOrCreateEntity(client, tagCache, "Tag", name);
-      await client.query(
+      const tagId = await getOrCreateEntity(tagCache, "Tag", name);
+      await queryWithRetry(
         `INSERT INTO "BookTag" ("bookId", "tagId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
         [bookId, tagId]
       );
@@ -208,7 +244,8 @@ async function insertBook(client: PoolClient, work: OLWork, subjectName: string)
     return true;
   } catch (err: any) {
     if (err.code === "23505") return false;
-    // Don't log every error, just continue
+    // Log but continue
+    console.error(`\n⚠️ Error inserting "${work.title}": ${err.message}`);
     return false;
   }
 }
@@ -217,43 +254,38 @@ async function ingestSubject(subject: string) {
   const subjectName = subject.replace(/_/g, " ");
   process.stdout.write(`\n📚 ${subjectName}: `);
 
-  const client = await pool.connect();
   let offset = 0;
   let fetched = 0;
   let inserted = 0;
 
-  try {
-    while (fetched < BOOKS_PER_SUBJECT && totalInserted < TARGET_BOOKS) {
-      const limit = Math.min(100, BOOKS_PER_SUBJECT - fetched);
-      const works = await fetchSubjectPage(subject, offset, limit);
-      if (!works || works.length === 0) break;
+  while (fetched < BOOKS_PER_SUBJECT && totalInserted < TARGET_BOOKS) {
+    const limit = Math.min(100, BOOKS_PER_SUBJECT - fetched);
+    const works = await fetchSubjectPage(subject, offset, limit);
+    if (!works || works.length === 0) break;
 
-      for (const work of works) {
-        if (totalInserted >= TARGET_BOOKS) break;
-        const ok = await insertBook(client, work, subjectName);
-        if (ok) {
-          inserted++;
-          totalInserted++;
-          if (totalInserted % 100 === 0) process.stdout.write(`[${totalInserted}] `);
-        } else {
-          totalSkipped++;
-        }
+    for (const work of works) {
+      if (totalInserted >= TARGET_BOOKS) break;
+      const ok = await insertBook(work, subjectName);
+      if (ok) {
+        inserted++;
+        totalInserted++;
+        if (totalInserted % 100 === 0) process.stdout.write(`[${totalInserted}] `);
+      } else {
+        totalSkipped++;
       }
-
-      fetched += works.length;
-      offset += limit;
-      await sleep(600);
-      if (works.length < limit) break;
     }
-  } finally {
-    client.release();
+
+    fetched += works.length;
+    offset += limit;
+    await sleep(800); // Rate limit
+    if (works.length < limit) break;
   }
 
   console.log(`→ +${inserted} (total: ${totalInserted})`);
 }
 
 async function main() {
-  console.log("🔮 Book Therapist — Ingestion Pipeline");
+  console.log("🔮 Book Therapist — Ingestion Pipeline (Resilient)");
   console.log(`   Target: ${TARGET_BOOKS.toLocaleString()} books, ${SUBJECTS.length} subjects\n`);
 
   try {
@@ -261,13 +293,12 @@ async function main() {
     const existing = parseInt(res.rows[0].c);
     console.log(`✅ Database connected (${existing} existing books)\n`);
     if (existing > 0) {
-      // Load existing slugs to skip
       const slugs = await pool.query("SELECT slug FROM \"Book\"");
       for (const row of slugs.rows) seenSlugs.add(row.slug);
       console.log(`   Loaded ${seenSlugs.size} existing slugs to skip\n`);
     }
   } catch (err) {
-    console.error("❌ Database connection failed");
+    console.error("❌ Database connection failed:", err);
     process.exit(1);
   }
 
@@ -278,16 +309,27 @@ async function main() {
       console.log(`\n🎉 Reached target!`);
       break;
     }
-    await ingestSubject(subject);
+    try {
+      await ingestSubject(subject);
+    } catch (err: any) {
+      console.error(`\n❌ Subject "${subject}" failed: ${err.message}`);
+      // Reconnect and continue with next subject
+      try { await pool.end(); } catch {}
+      pool = createPool();
+      await sleep(3000);
+    }
   }
 
   const elapsed = Math.round((Date.now() - startTime) / 1000);
-  const { rows } = await pool.query("SELECT count(*) as c FROM \"Book\"");
-
-  console.log(`\n${"=".repeat(50)}`);
-  console.log(`✅ Done! +${totalInserted} books (${totalSkipped} skipped) in ${Math.floor(elapsed / 60)}m ${elapsed % 60}s`);
-  console.log(`   Total in DB: ${rows[0].c}`);
-  console.log("=".repeat(50));
+  try {
+    const { rows } = await pool.query("SELECT count(*) as c FROM \"Book\"");
+    console.log(`\n${"=".repeat(50)}`);
+    console.log(`✅ Done! +${totalInserted} books (${totalSkipped} skipped) in ${Math.floor(elapsed / 60)}m ${elapsed % 60}s`);
+    console.log(`   Total in DB: ${rows[0].c}`);
+    console.log("=".repeat(50));
+  } catch {
+    console.log(`\n✅ Done! +${totalInserted} books in ${Math.floor(elapsed / 60)}m ${elapsed % 60}s`);
+  }
 
   await pool.end();
 }
