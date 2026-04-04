@@ -3,7 +3,6 @@
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let prisma: any = null;
-let initError: string | null = null;
 
 try {
   const dbUrl = process.env.DATABASE_URL;
@@ -26,8 +25,7 @@ try {
     prisma = globalForPrisma.prisma;
   }
 } catch (err: any) {
-  initError = err?.message || String(err);
-  console.error("[prisma.ts] Failed to initialize Prisma:", initError);
+  console.error("[prisma.ts] Failed to initialize Prisma:", err?.message);
 }
 
-export { prisma, initError };
+export { prisma };
