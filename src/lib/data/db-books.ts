@@ -213,7 +213,7 @@ export async function getBookBySlugFromDb(slug: string) {
 
   if (!book) return null;
 
-  // Find similar books by matching genres/themes if no explicit similar books
+  // Find similar books by matching genres — use raw SQL for speed
   let similarBooks: any[] = [];
   if (book.similarTo.length > 0) {
     similarBooks = book.similarTo.map((s: any) => ({
@@ -224,27 +224,29 @@ export async function getBookBySlugFromDb(slug: string) {
       avgRating: s.similarTo.avgRating,
     }));
   } else {
-    // Find books with similar genres
+    // Use raw SQL for fast similar book lookup
     const genreIds = book.genres.map((g: any) => g.genreId);
     if (genreIds.length > 0) {
-      const similar = await prisma.book.findMany({
-        where: {
-          id: { not: book.id },
-          genres: { some: { genreId: { in: genreIds } } },
-        },
-        take: 6,
-        orderBy: { avgRating: "desc" },
-        include: {
-          authors: { include: { author: true } },
-        },
-      });
-      similarBooks = similar.map((s: any) => ({
-        slug: s.slug,
-        title: s.title,
-        coverImage: s.coverImage,
-        authors: s.authors.map((a: any) => a.author.name),
-        avgRating: s.avgRating,
-      }));
+      try {
+        const similar = await prisma.$queryRawUnsafe(`
+          SELECT DISTINCT b.slug, b.title, b."coverImage", b."avgRating"
+          FROM "Book" b
+          JOIN "BookGenre" bg ON b.id = bg."bookId"
+          WHERE bg."genreId" = ANY($1::text[])
+          AND b.id != $2
+          ORDER BY b."avgRating" DESC
+          LIMIT 6
+        `, genreIds, book.id);
+        similarBooks = (similar as any[]).map((s: any) => ({
+          slug: s.slug,
+          title: s.title,
+          coverImage: s.coverImage,
+          authors: [],
+          avgRating: s.avgRating,
+        }));
+      } catch {
+        // Fallback: skip similar books on error
+      }
     }
   }
 

@@ -27,32 +27,82 @@ import { StarRating } from "@/components/ui/StarRating";
 import { LoadingSpinner } from "@/components/ui/LoadingSpinner";
 import { BookCard } from "@/components/ui/BookCard";
 import { cn } from "@/lib/utils/cn";
-import { getBookBySlug, getSimilarBooks } from "@/lib/data/books";
 import {
   getBookEntry,
   saveBookToLibrary,
   rateBook,
   addBookNote,
 } from "@/lib/data/user-store";
-import type { SeedBook } from "@/data/seed-books";
 import type { ReadingStatus } from "@/types";
+
+interface BookDetail {
+  title: string;
+  slug: string;
+  subtitle?: string;
+  description: string;
+  longDescription?: string;
+  coverImage: string | null;
+  pageCount?: number;
+  avgRating: number;
+  ratingsCount: number;
+  pacing: string;
+  readingDifficulty: string;
+  isFiction: boolean;
+  emotionalTone: string[];
+  language?: string;
+  publishedDate?: string;
+  publisher?: string;
+  isbn13?: string;
+  authors: string[];
+  genres: string[];
+  themes: string[];
+  tags: string[];
+  awards: { name: string; category?: string; year?: number; won?: boolean }[];
+  adaptations: { title: string; type: string; year?: number; platform?: string; director?: string }[];
+  reviews: { source: string; rating?: number; content: string; highlight?: string }[];
+  quotes: { text: string; page?: number }[];
+}
+
+interface SimilarBook {
+  slug: string;
+  title: string;
+  coverImage: string | null;
+  authors: string[];
+  avgRating: number;
+}
 
 export default function BookDetailPage() {
   const params = useParams();
   const slug = params.slug as string;
-  const [book, setBook] = useState<SeedBook | null>(null);
-  const [similar, setSimilar] = useState<SeedBook[]>([]);
+  const [book, setBook] = useState<BookDetail | null>(null);
+  const [similar, setSimilar] = useState<SimilarBook[]>([]);
+  const [notFound, setNotFound] = useState(false);
   const [savedStatus, setSavedStatus] = useState<ReadingStatus | null>(null);
   const [userRating, setUserRating] = useState<number>(0);
   const [note, setNote] = useState("");
   const [showNoteInput, setShowNoteInput] = useState(false);
 
   useEffect(() => {
-    const b = getBookBySlug(slug);
-    if (b) {
-      setBook(b);
-      setSimilar(getSimilarBooks(slug));
+    async function loadBook() {
+      try {
+        const res = await fetch(`/api/books/${slug}`);
+        if (!res.ok) {
+          setNotFound(true);
+          return;
+        }
+        const data = await res.json();
+        if (data.book) {
+          setBook(data.book);
+          setSimilar(data.similarBooks || []);
+        } else {
+          setNotFound(true);
+        }
+      } catch {
+        setNotFound(true);
+      }
     }
+    loadBook();
+
     const entry = getBookEntry(slug);
     if (entry) {
       setSavedStatus(entry.status);
@@ -60,6 +110,25 @@ export default function BookDetailPage() {
       if (entry.note) setNote(entry.note);
     }
   }, [slug]);
+
+  if (notFound) {
+    return (
+      <div className="flex flex-col min-h-screen">
+        <Navbar />
+        <main className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <BookOpen className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+            <h1 className="text-2xl font-bold text-foreground mb-2">Book not found</h1>
+            <p className="text-muted-foreground mb-6">The book you&apos;re looking for doesn&apos;t exist.</p>
+            <Link href="/discover">
+              <Button variant="primary">Back to Discover</Button>
+            </Link>
+          </div>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
 
   if (!book) {
     return (
@@ -154,7 +223,7 @@ export default function BookDetailPage() {
                   <Badge key={g} variant="default">{g}</Badge>
                 ))}
                 <Badge variant="mood">{book.pacing} pace</Badge>
-                <span className={cn("inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium", difficultyColors[book.readingDifficulty])}>
+                <span className={cn("inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium", difficultyColors[book.readingDifficulty] || "bg-neutral-100 text-neutral-800")}>
                   {book.readingDifficulty} read
                 </span>
                 {book.isFiction ? (
@@ -271,14 +340,14 @@ export default function BookDetailPage() {
                     <item.icon className="h-4 w-4" />
                     <span className="text-xs font-medium uppercase tracking-wide">{item.label}</span>
                   </div>
-                  <p className="text-sm font-semibold text-foreground">{item.value}</p>
+                  <p className="text-sm font-semibold text-foreground">{String(item.value)}</p>
                 </div>
               ))}
           </div>
         </section>
 
         {/* Quotes */}
-        {book.quotes.length > 0 && (
+        {book.quotes && book.quotes.length > 0 && (
           <section className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 border-t border-border">
             <h2 className="text-xl font-bold text-foreground mb-6 flex items-center gap-2">
               <Quote className="h-5 w-5 text-primary-500" />
@@ -301,7 +370,7 @@ export default function BookDetailPage() {
         )}
 
         {/* Awards */}
-        {book.awards.length > 0 && (
+        {book.awards && book.awards.length > 0 && (
           <section className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 border-t border-border">
             <h2 className="text-xl font-bold text-foreground mb-6 flex items-center gap-2">
               <Award className="h-5 w-5 text-amber-500" />
@@ -334,7 +403,7 @@ export default function BookDetailPage() {
         )}
 
         {/* Adaptations */}
-        {book.adaptations.length > 0 && (
+        {book.adaptations && book.adaptations.length > 0 && (
           <section className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 border-t border-border">
             <h2 className="text-xl font-bold text-foreground mb-6 flex items-center gap-2">
               <Film className="h-5 w-5 text-sky-500" />
@@ -360,7 +429,7 @@ export default function BookDetailPage() {
         )}
 
         {/* Reviews */}
-        {book.reviews.length > 0 && (
+        {book.reviews && book.reviews.length > 0 && (
           <section className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 border-t border-border">
             <h2 className="text-xl font-bold text-foreground mb-6 flex items-center gap-2">
               <Star className="h-5 w-5 text-primary-500" />
@@ -392,20 +461,22 @@ export default function BookDetailPage() {
         )}
 
         {/* Themes */}
-        <section className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 border-t border-border">
-          <h2 className="text-xl font-bold text-foreground mb-4">Themes</h2>
-          <div className="flex flex-wrap gap-2">
-            {book.themes.map((theme) => (
-              <Link
-                key={theme}
-                href={`/discover?theme=${theme}`}
-                className="inline-flex items-center px-3 py-1.5 rounded-full bg-primary-50 text-primary-800 text-sm font-medium hover:bg-primary-100 transition-colors"
-              >
-                {theme}
-              </Link>
-            ))}
-          </div>
-        </section>
+        {book.themes && book.themes.length > 0 && (
+          <section className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 border-t border-border">
+            <h2 className="text-xl font-bold text-foreground mb-4">Themes</h2>
+            <div className="flex flex-wrap gap-2">
+              {book.themes.map((theme) => (
+                <Link
+                  key={theme}
+                  href={`/discover?theme=${theme}`}
+                  className="inline-flex items-center px-3 py-1.5 rounded-full bg-primary-50 text-primary-800 text-sm font-medium hover:bg-primary-100 transition-colors"
+                >
+                  {theme}
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Similar Books */}
         {similar.length > 0 && (
@@ -420,7 +491,7 @@ export default function BookDetailPage() {
                   authors={b.authors}
                   coverImage={b.coverImage}
                   rating={b.avgRating}
-                  genres={b.genres.slice(0, 2)}
+                  genres={[]}
                   onClick={() => window.location.href = `/books/${b.slug}`}
                 />
               ))}
